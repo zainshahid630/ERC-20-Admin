@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
+import { ToastContainer, toast } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 import { contractInteraction } from './utils/contractInteraction';
 import { blockchainConfig, getNetworkConfig, getTokenAddress } from './config/blockchainConfig';
 import { initializeProvider, connectWallet } from './utils/blockchainInteraction';
@@ -52,6 +54,8 @@ export default function AdminPanel() {
     isWhitelistEnabled: false
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [currentChainId, setCurrentChainId] = useState(null);
+  const [isCorrectNetwork, setIsCorrectNetwork] = useState(true);
   
   // Form state variables
   const [transferTo, setTransferTo] = useState('');
@@ -62,6 +66,10 @@ export default function AdminPanel() {
   const [mintAmount, setMintAmount] = useState('');
   const [mintAddress, setMintAddress] = useState('');
   const [burnAmount, setBurnAmount] = useState('');
+
+  useEffect(()=>{
+    initializeContract()
+  },[walletAddress])
 
   // Update available networks when blockchain changes
   useEffect(() => {
@@ -99,11 +107,6 @@ export default function AdminPanel() {
       return;
     }
     
-    if (!selectedToken && !contractAddress) {
-      setWalletError("Please select a token or enter a contract address first");
-      return;
-    }
-    
     setIsConnecting(true);
     setWalletError('');
     
@@ -115,11 +118,17 @@ export default function AdminPanel() {
       setProvider(walletProvider);
       setSigner(walletSigner);
       
-      // Automatically initialize contract after wallet connection
-      if (contractAddress && walletSigner) {
+      // Check if we're on the correct network
+      const network = await walletProvider.getNetwork();
+      const targetChainId = blockchainConfig['Ethereum']['sepolia'].chainId;
+      setCurrentChainId(network.chainId);
+      setIsCorrectNetwork(network.chainId === targetChainId);
+      
+      // Initialize contract after wallet connection if contract address is available
+      if (contractAddress) {
         try {
           setIsLoading(true);
-          const tokenContract = contractInteraction.getContract(contractAddress, walletSigner);
+          const tokenContract = contractInteraction.getContract(contractAddress, walletProvider);
           setContract(tokenContract);
           
           // Load token info
@@ -204,11 +213,15 @@ export default function AdminPanel() {
 
   // Initialize contract
   const initializeContract = async () => {
-    if (!contractAddress || !signer) return;
+    if (!contractAddress) {
+      // setWalletError("Please enter a contract address");
+      return;
+    }
     
     try {
       setIsLoading(true);
-      const tokenContract = contractInteraction.getContract(contractAddress, signer);
+      // Use provider instead of signer for read-only operations if signer is not available
+      const tokenContract = contractInteraction.getContract(contractAddress, signer || provider);
       setContract(tokenContract);
       
       // Load token info
@@ -228,12 +241,19 @@ export default function AdminPanel() {
     try {
       setIsLoading(true);
       
-      const [name, symbol, decimals, totalSupply, balance, isPaused, isWhitelistEnabled] = await Promise.all([
+      // Get decimals first since we need it to format other values
+      const decimals = await contractInteraction.readFunctions.getDecimals(tokenContract);
+      
+      // Check if wallet address is available before querying balance
+      let balance = ethers.BigNumber.from(0);
+      if (walletAddress && walletAddress !== '') {
+        balance = await contractInteraction.readFunctions.getBalanceOf(tokenContract, walletAddress);
+      }
+      
+      const [name, symbol, totalSupply, isPaused, isWhitelistEnabled] = await Promise.all([
         contractInteraction.readFunctions.getName(tokenContract),
         contractInteraction.readFunctions.getSymbol(tokenContract),
-        contractInteraction.readFunctions.getDecimals(tokenContract),
         contractInteraction.readFunctions.getTotalSupply(tokenContract),
-        contractInteraction.readFunctions.getBalanceOf(tokenContract, walletAddress),
         contractInteraction.readFunctions.isPaused(tokenContract).catch(() => false),
         contractInteraction.readFunctions.isWhitelistEnabled(tokenContract).catch(() => false)
       ]);
@@ -241,8 +261,12 @@ export default function AdminPanel() {
       // Check if connected wallet is the owner
       let isOwner = false;
       try {
-        const owner = await tokenContract.owner();
-        isOwner = owner.toLowerCase() === walletAddress.toLowerCase();
+        console.log('walletAddress',walletAddress)
+        if (walletAddress ) {
+          const owner = await tokenContract.owner();
+          console.log('owner',owner)
+          isOwner = owner.toLowerCase() === walletAddress.toLowerCase();
+        }
       } catch (error) {
         console.log("Could not determine owner status:", error);
       }
@@ -258,8 +282,8 @@ export default function AdminPanel() {
         isWhitelistEnabled
       });
     } catch (error) {
-      // console.error("Error loading token info:", error);
-      // setWalletError("Error loading token info: " + error.message);
+      console.error("Error loading token info:", error);
+      setWalletError("Error loading token info: " + error.message);
     } finally {
       setIsLoading(false);
     }
@@ -269,24 +293,102 @@ export default function AdminPanel() {
   const handleTransfer = async (e) => {
     e.preventDefault();
     if (!contract || !transferTo || !transferAmount) return;
-    
+
     try {
       setIsLoading(true);
-      const amount = ethers.utils.parseUnits(transferAmount, tokenInfo.decimals);
-      await contractInteraction.writeFunctions.transfer(contract, transferTo, amount);
       
-      // Refresh balance after transfer
-      const balance = await contractInteraction.readFunctions.getBalanceOf(contract, walletAddress);
-      setTokenInfo({
-        ...tokenInfo,
-        balance: ethers.utils.formatUnits(balance, tokenInfo.decimals)
-      });
+      // Validate recipient address
+      if (!ethers.utils.isAddress(transferTo)) {
+        toast.error("Invalid recipient address format");
+        return;
+      }
       
-      setTransferTo('');
-      setTransferAmount('');
+      // Validate amount
+      if (parseFloat(transferAmount) <= 0) {
+        toast.error("Amount must be greater than 0");
+        return;
+      }
+      
+      // Get decimals from token info
+      const decimals = parseInt(tokenInfo.decimals);
+      
+      // Parse amount with correct decimals
+      const amount = ethers.utils.parseUnits(transferAmount, decimals);
+      
+      // Check if user has enough balance
+      const currentBalance = ethers.utils.parseUnits(tokenInfo.balance, decimals);
+      if (currentBalance.lt(amount)) {
+        toast.error(`Insufficient balance. You have ${tokenInfo.balance} ${tokenInfo.symbol}`);
+        console.log('Isss')
+        return;
+      }
+      
+      // Check if the contract is paused
+      if (tokenInfo.isPaused) {
+        toast.error("Token transfers are currently paused");
+        return;
+      }
+      
+      // Show pending toast
+      const pendingToast = toast.loading(`Initiating transfer of ${transferAmount} ${tokenInfo.symbol} to ${transferTo.substring(0, 6)}...${transferTo.substring(transferTo.length - 4)}`);
+      
+      try {
+        // Execute transfer
+        const receipt = await contractInteraction.writeFunctions.transfer(contract, transferTo, amount);
+        
+        // Refresh balance after transfer
+        const newBalance = await contractInteraction.readFunctions.getBalanceOf(contract, walletAddress);
+        
+        setTokenInfo({
+          ...tokenInfo,
+          balance: ethers.utils.formatUnits(newBalance, decimals)
+        });
+        
+        setTransferTo('');
+        setTransferAmount('');
+        
+        // Update toast to success
+        toast.update(pendingToast, { 
+          render: `Successfully transferred ${transferAmount} ${tokenInfo.symbol}`, 
+          type: "success", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      } catch (error) {
+        console.error("Transfer error:", error);
+        
+        // Extract the most useful error message
+        let errorMessage = "Unknown error occurred";
+        
+        if (typeof error === 'string') {
+          errorMessage = error;
+        } else if (error.message) {
+          errorMessage = error.message;
+        } else if (error.data && error.data.message) {
+          errorMessage = error.data.message;
+        } else if (error.reason) {
+          errorMessage = error.reason;
+        }
+        
+        // Clean up common MetaMask error messages
+        if (errorMessage.includes("user rejected transaction")) {
+          errorMessage = "Transaction was rejected in your wallet";
+        } else if (errorMessage.includes("insufficient funds")) {
+          errorMessage = "Insufficient ETH for gas fees";
+        } else if (errorMessage.includes("CALL_EXCEPTION")) {
+          errorMessage = "Transaction failed. The contract may have restrictions on transfers.";
+        }
+        
+        // Update toast to error
+        toast.update(pendingToast, { 
+          render: `Transfer failed: ${errorMessage}`, 
+          type: "error", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      }
     } catch (error) {
-      console.error("Transfer error:", error);
-      setWalletError("Transfer error: " + error.message);
+      toast.error(`Error preparing transfer: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -299,11 +401,43 @@ export default function AdminPanel() {
     
     try {
       setIsLoading(true);
-      await contractInteraction.writeFunctions.addBlackList(contract, blacklistAddress);
-      setBlacklistAddress('');
+      
+      // Validate address
+      if (!ethers.utils.isAddress(blacklistAddress)) {
+        toast.error("Invalid address format");
+        return;
+      }
+      
+      // Show pending toast
+      const pendingToast = toast.loading(`Adding ${blacklistAddress.substring(0, 6)}...${blacklistAddress.substring(blacklistAddress.length - 4)} to blacklist`);
+      
+      try {
+        await contractInteraction.writeFunctions.addBlackList(contract, blacklistAddress);
+        setBlacklistAddress('');
+        
+        // Update toast to success
+        toast.update(pendingToast, { 
+          render: `Address added to blacklist successfully`, 
+          type: "success", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      } catch (error) {
+        console.error("Blacklist error:", error);
+        
+        // Extract error message
+        let errorMessage = error.message || "Unknown error occurred";
+        
+        // Update toast to error
+        toast.update(pendingToast, { 
+          render: `Failed to add to blacklist: ${errorMessage}`, 
+          type: "error", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      }
     } catch (error) {
-      console.error("Blacklist error:", error);
-      setWalletError("Blacklist error: " + error.message);
+      toast.error(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -316,11 +450,43 @@ export default function AdminPanel() {
     
     try {
       setIsLoading(true);
-      await contractInteraction.writeFunctions.removeBlackList(contract, blacklistAddress);
-      setBlacklistAddress('');
+      
+      // Validate address
+      if (!ethers.utils.isAddress(blacklistAddress)) {
+        toast.error("Invalid address format");
+        return;
+      }
+      
+      // Show pending toast
+      const pendingToast = toast.loading(`Removing ${blacklistAddress.substring(0, 6)}...${blacklistAddress.substring(blacklistAddress.length - 4)} from blacklist`);
+      
+      try {
+        await contractInteraction.writeFunctions.removeBlackList(contract, blacklistAddress);
+        setBlacklistAddress('');
+        
+        // Update toast to success
+        toast.update(pendingToast, { 
+          render: `Address removed from blacklist successfully`, 
+          type: "success", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      } catch (error) {
+        console.error("Remove from blacklist error:", error);
+        
+        // Extract error message
+        let errorMessage = error.message || "Unknown error occurred";
+        
+        // Update toast to error
+        toast.update(pendingToast, { 
+          render: `Failed to remove from blacklist: ${errorMessage}`, 
+          type: "error", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      }
     } catch (error) {
-      console.error("Remove from blacklist error:", error);
-      setWalletError("Remove from blacklist error: " + error.message);
+      toast.error(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -333,11 +499,43 @@ export default function AdminPanel() {
     
     try {
       setIsLoading(true);
-      await contractInteraction.writeFunctions.addWhiteList(contract, whitelistAddress);
-      setWhitelistAddress('');
+      
+      // Validate address
+      if (!ethers.utils.isAddress(whitelistAddress)) {
+        toast.error("Invalid address format");
+        return;
+      }
+      
+      // Show pending toast
+      const pendingToast = toast.loading(`Adding ${whitelistAddress.substring(0, 6)}...${whitelistAddress.substring(whitelistAddress.length - 4)} to whitelist`);
+      
+      try {
+        await contractInteraction.writeFunctions.addWhiteList(contract, whitelistAddress);
+        setWhitelistAddress('');
+        
+        // Update toast to success
+        toast.update(pendingToast, { 
+          render: `Address added to whitelist successfully`, 
+          type: "success", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      } catch (error) {
+        console.error("Whitelist error:", error);
+        
+        // Extract error message
+        let errorMessage = error.message || "Unknown error occurred";
+        
+        // Update toast to error
+        toast.update(pendingToast, { 
+          render: `Failed to add to whitelist: ${errorMessage}`, 
+          type: "error", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      }
     } catch (error) {
-      console.error("Whitelist error:", error);
-      setWalletError("Whitelist error: " + error.message);
+      toast.error(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -350,11 +548,43 @@ export default function AdminPanel() {
     
     try {
       setIsLoading(true);
-      await contractInteraction.writeFunctions.removeWhiteList(contract, whitelistAddress);
-      setWhitelistAddress('');
+      
+      // Validate address
+      if (!ethers.utils.isAddress(whitelistAddress)) {
+        toast.error("Invalid address format");
+        return;
+      }
+      
+      // Show pending toast
+      const pendingToast = toast.loading(`Removing ${whitelistAddress.substring(0, 6)}...${whitelistAddress.substring(whitelistAddress.length - 4)} from whitelist`);
+      
+      try {
+        await contractInteraction.writeFunctions.removeWhiteList(contract, whitelistAddress);
+        setWhitelistAddress('');
+        
+        // Update toast to success
+        toast.update(pendingToast, { 
+          render: `Address removed from whitelist successfully`, 
+          type: "success", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      } catch (error) {
+        console.error("Remove from whitelist error:", error);
+        
+        // Extract error message
+        let errorMessage = error.message || "Unknown error occurred";
+        
+        // Update toast to error
+        toast.update(pendingToast, { 
+          render: `Failed to remove from whitelist: ${errorMessage}`, 
+          type: "error", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      }
     } catch (error) {
-      console.error("Remove from whitelist error:", error);
-      setWalletError("Remove from whitelist error: " + error.message);
+      toast.error(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -366,21 +596,47 @@ export default function AdminPanel() {
     
     try {
       setIsLoading(true);
-      if (tokenInfo.isPaused) {
-        await contractInteraction.writeFunctions.unpause(contract);
-      } else {
-        await contractInteraction.writeFunctions.pause(contract);
-      }
       
-      // Update pause status
-      const isPaused = await contractInteraction.readFunctions.isPaused(contract);
-      setTokenInfo({
-        ...tokenInfo,
-        isPaused
-      });
+      const action = tokenInfo.isPaused ? "Unpausing" : "Pausing";
+      const pendingToast = toast.loading(`${action} token transfers...`);
+      
+      try {
+        if (tokenInfo.isPaused) {
+          await contractInteraction.writeFunctions.unpause(contract);
+        } else {
+          await contractInteraction.writeFunctions.pause(contract);
+        }
+        
+        // Update pause status
+        const isPaused = await contractInteraction.readFunctions.isPaused(contract);
+        setTokenInfo({
+          ...tokenInfo,
+          isPaused
+        });
+        
+        // Update toast to success
+        toast.update(pendingToast, { 
+          render: `Token transfers ${isPaused ? 'paused' : 'unpaused'} successfully`, 
+          type: "success", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      } catch (error) {
+        console.error("Pause toggle error:", error);
+        
+        // Extract error message
+        let errorMessage = error.message || "Unknown error occurred";
+        
+        // Update toast to error
+        toast.update(pendingToast, { 
+          render: `Failed to ${tokenInfo.isPaused ? 'unpause' : 'pause'} transfers: ${errorMessage}`, 
+          type: "error", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      }
     } catch (error) {
-      console.error("Pause toggle error:", error);
-      setWalletError("Pause toggle error: " + error.message);
+      toast.error(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -392,21 +648,47 @@ export default function AdminPanel() {
     
     try {
       setIsLoading(true);
-      if (tokenInfo.isWhitelistEnabled) {
-        await contractInteraction.writeFunctions.disableWhiteList(contract);
-      } else {
-        await contractInteraction.writeFunctions.enableWhiteList(contract);
-      }
       
-      // Update whitelist status
-      const isWhitelistEnabled = await contractInteraction.readFunctions.isWhitelistEnabled(contract);
-      setTokenInfo({
-        ...tokenInfo,
-        isWhitelistEnabled
-      });
+      const action = tokenInfo.isWhitelistEnabled ? "Disabling" : "Enabling";
+      const pendingToast = toast.loading(`${action} whitelist...`);
+      
+      try {
+        if (tokenInfo.isWhitelistEnabled) {
+          await contractInteraction.writeFunctions.disableWhiteList(contract);
+        } else {
+          await contractInteraction.writeFunctions.enableWhiteList(contract);
+        }
+        
+        // Update whitelist status
+        const isWhitelistEnabled = await contractInteraction.readFunctions.isWhitelistEnabled(contract);
+        setTokenInfo({
+          ...tokenInfo,
+          isWhitelistEnabled
+        });
+        
+        // Update toast to success
+        toast.update(pendingToast, { 
+          render: `Whitelist ${isWhitelistEnabled ? 'enabled' : 'disabled'} successfully`, 
+          type: "success", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      } catch (error) {
+        console.error("Whitelist toggle error:", error);
+        
+        // Extract error message
+        let errorMessage = error.message || "Unknown error occurred";
+        
+        // Update toast to error
+        toast.update(pendingToast, { 
+          render: `Failed to ${tokenInfo.isWhitelistEnabled ? 'disable' : 'enable'} whitelist: ${errorMessage}`, 
+          type: "error", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      }
     } catch (error) {
-      console.error("Whitelist toggle error:", error);
-      setWalletError("Whitelist toggle error: " + error.message);
+      toast.error(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -419,17 +701,55 @@ export default function AdminPanel() {
     
     try {
       setIsLoading(true);
-      await contractInteraction.writeFunctions.transferOwnership(contract, newOwnerAddress);
-      setNewOwnerAddress('');
       
-      // Update owner status
-      setTokenInfo({
-        ...tokenInfo,
-        isOwner: false // No longer the owner
-      });
+      // Validate address
+      if (!ethers.utils.isAddress(newOwnerAddress)) {
+        toast.error("Invalid address format");
+        return;
+      }
+      
+      // Confirm with user
+      if (!window.confirm(`Are you sure you want to transfer ownership to ${newOwnerAddress}? This action cannot be undone!`)) {
+        toast.info("Ownership transfer cancelled");
+        return;
+      }
+      
+      // Show pending toast
+      const pendingToast = toast.loading(`Transferring ownership to ${newOwnerAddress.substring(0, 6)}...${newOwnerAddress.substring(newOwnerAddress.length - 4)}`);
+      
+      try {
+        await contractInteraction.writeFunctions.transferOwnership(contract, newOwnerAddress);
+        setNewOwnerAddress('');
+        
+        // Update owner status
+        setTokenInfo({
+          ...tokenInfo,
+          isOwner: false // No longer the owner
+        });
+        
+        // Update toast to success
+        toast.update(pendingToast, { 
+          render: `Ownership transferred successfully`, 
+          type: "success", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      } catch (error) {
+        console.error("Transfer ownership error:", error);
+        
+        // Extract error message
+        let errorMessage = error.message || "Unknown error occurred";
+        
+        // Update toast to error
+        toast.update(pendingToast, { 
+          render: `Failed to transfer ownership: ${errorMessage}`, 
+          type: "error", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      }
     } catch (error) {
-      console.error("Transfer ownership error:", error);
-      setWalletError("Transfer ownership error: " + error.message);
+      toast.error(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -442,21 +762,67 @@ export default function AdminPanel() {
     
     try {
       setIsLoading(true);
-      const amount = ethers.utils.parseUnits(mintAmount, tokenInfo.decimals);
-      await contractInteraction.writeFunctions.mint(contract, mintAddress, amount);
       
-      // Refresh total supply after minting
-      const totalSupply = await contractInteraction.readFunctions.getTotalSupply(contract);
-      setTokenInfo({
-        ...tokenInfo,
-        totalSupply: ethers.utils.formatUnits(totalSupply, tokenInfo.decimals)
-      });
+      // Validate address
+      if (!ethers.utils.isAddress(mintAddress)) {
+        toast.error("Invalid recipient address format");
+        return;
+      }
       
-      setMintAddress('');
-      setMintAmount('');
+      // Validate amount
+      if (parseFloat(mintAmount) <= 0) {
+        toast.error("Amount must be greater than 0");
+        return;
+      }
+      
+      // Show pending toast
+      const pendingToast = toast.loading(`Minting ${mintAmount} ${tokenInfo.symbol} to ${mintAddress.substring(0, 6)}...${mintAddress.substring(mintAddress.length - 4)}`);
+      
+      try {
+        const amount = ethers.utils.parseUnits(mintAmount, tokenInfo.decimals);
+        await contractInteraction.writeFunctions.mint(contract, mintAddress, amount);
+        
+        // Refresh total supply after minting
+        const totalSupply = await contractInteraction.readFunctions.getTotalSupply(contract);
+        
+        // Refresh balance if minting to self
+        let newBalance = null;
+        if (mintAddress.toLowerCase() === walletAddress.toLowerCase()) {
+          newBalance = await contractInteraction.readFunctions.getBalanceOf(contract, walletAddress);
+        }
+        
+        setTokenInfo({
+          ...tokenInfo,
+          totalSupply: ethers.utils.formatUnits(totalSupply, tokenInfo.decimals),
+          ...(newBalance ? { balance: ethers.utils.formatUnits(newBalance, tokenInfo.decimals) } : {})
+        });
+        
+        setMintAddress('');
+        setMintAmount('');
+        
+        // Update toast to success
+        toast.update(pendingToast, { 
+          render: `Successfully minted ${mintAmount} ${tokenInfo.symbol}`, 
+          type: "success", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      } catch (error) {
+        console.error("Mint error:", error);
+        
+        // Extract error message
+        let errorMessage = error.message || "Unknown error occurred";
+        
+        // Update toast to error
+        toast.update(pendingToast, { 
+          render: `Failed to mint tokens: ${errorMessage}`, 
+          type: "error", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      }
     } catch (error) {
-      console.error("Mint error:", error);
-      setWalletError("Mint error: " + error.message);
+      toast.error(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -469,33 +835,148 @@ export default function AdminPanel() {
     
     try {
       setIsLoading(true);
+      
+      // Validate amount
+      if (parseFloat(burnAmount) <= 0) {
+        toast.error("Amount must be greater than 0");
+        return;
+      }
+      
+      // Parse amount with correct decimals
       const amount = ethers.utils.parseUnits(burnAmount, tokenInfo.decimals);
-      await contractInteraction.writeFunctions.burn(contract, amount);
       
-      // Refresh total supply and balance after burning
-      const [totalSupply, balance] = await Promise.all([
-        contractInteraction.readFunctions.getTotalSupply(contract),
-        contractInteraction.readFunctions.getBalanceOf(contract, walletAddress)
-      ]);
+      // Check if user has enough balance
+      const currentBalance = ethers.utils.parseUnits(tokenInfo.balance, tokenInfo.decimals);
+      if (currentBalance.lt(amount)) {
+        toast.error(`Insufficient balance. You have ${tokenInfo.balance} ${tokenInfo.symbol}`);
+        return;
+      }
       
-      setTokenInfo({
-        ...tokenInfo,
-        totalSupply: ethers.utils.formatUnits(totalSupply, tokenInfo.decimals),
-        balance: ethers.utils.formatUnits(balance, tokenInfo.decimals)
-      });
+      // Show pending toast
+      const pendingToast = toast.loading(`Burning ${burnAmount} ${tokenInfo.symbol}`);
       
-      setBurnAmount('');
+      try {
+        await contractInteraction.writeFunctions.burn(contract, amount);
+        
+        // Refresh total supply and balance after burning
+        const [totalSupply, balance] = await Promise.all([
+          contractInteraction.readFunctions.getTotalSupply(contract),
+          contractInteraction.readFunctions.getBalanceOf(contract, walletAddress)
+        ]);
+        
+        setTokenInfo({
+          ...tokenInfo,
+          totalSupply: ethers.utils.formatUnits(totalSupply, tokenInfo.decimals),
+          balance: ethers.utils.formatUnits(balance, tokenInfo.decimals)
+        });
+        
+        setBurnAmount('');
+        
+        // Update toast to success
+        toast.update(pendingToast, { 
+          render: `Successfully burned ${burnAmount} ${tokenInfo.symbol}`, 
+          type: "success", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      } catch (error) {
+        console.error("Burn error:", error);
+        
+        // Extract error message
+        let errorMessage = error.message || "Unknown error occurred";
+        
+        // Update toast to error
+        toast.update(pendingToast, { 
+          render: `Failed to burn tokens: ${errorMessage}`, 
+          type: "error", 
+          isLoading: false,
+          autoClose: 5000
+        });
+      }
     } catch (error) {
-      console.error("Burn error:", error);
-      setWalletError("Burn error: " + error.message);
+      toast.error(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Add this function to switch to Sepolia
+  const switchToSepolia = async () => {
+    if (!provider) return;
+    
+    try {
+      setIsLoading(true);
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0xaa36a7' }], // Sepolia chainId in hex
+      });
+      
+      // Refresh the page after switching
+      window.location.reload();
+    } catch (error) {
+      // This error code indicates that the chain has not been added to MetaMask
+      if (error.code === 4902) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [
+              {
+                chainId: '0xaa36a7',
+                chainName: 'Sepolia Testnet',
+                nativeCurrency: {
+                  name: 'Sepolia ETH',
+                  symbol: 'ETH',
+                  decimals: 18,
+                },
+                rpcUrls: ['https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161'],
+                blockExplorerUrls: ['https://sepolia.etherscan.io'],
+              },
+            ],
+          });
+          
+          // Try switching again
+          await window.ethereum.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: '0xaa36a7' }],
+          });
+          
+          // Refresh the page after switching
+          window.location.reload();
+        } catch (addError) {
+          toast.error(`Failed to add Sepolia network: ${addError.message}`);
+        }
+      } else {
+        toast.error(`Failed to switch network: ${error.message}`);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Add this useEffect to check the network when provider changes
+  useEffect(() => {
+    const checkNetwork = async () => {
+      if (provider) {
+        try {
+          const network = await provider.getNetwork();
+          setCurrentChainId(network.chainId);
+          
+          // Check if we're on Sepolia (chainId 11155111)
+          const targetChainId = blockchainConfig['Ethereum']['sepolia'].chainId;
+          setIsCorrectNetwork(network.chainId === targetChainId);
+        } catch (error) {
+          console.error("Error checking network:", error);
+          setIsCorrectNetwork(false);
+        }
+      }
+    };
+    
+    checkNetwork();
+  }, [provider]);
+
   // Render content based on selected menu
   const renderContent = () => {
-    if (!walletAddress) {
+    if (!walletAddress && !contract) {
       return (
         <div className="space-y-4">
           <p className="text-gray-500 mb-4">Please connect your wallet to view token information.</p>
@@ -562,47 +1043,36 @@ export default function AdminPanel() {
             </div>
             
             {/* Custom Contract Address */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Or Enter Custom Contract Address
-              </label>
-              <input
-                type="text"
-                value={contractAddress}
-                onChange={handleContractAddressChange}
-                placeholder="0x..."
-                className="w-full border p-2 rounded"
-              />
-            </div>
+   
           </div>
         </div>
       );
     }
 
-    if (!contract) {
-      return (
-        <div className="mt-4">
-          <p className="mb-2">Initialize Contract:</p>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <input
-              type="text"
-              value={contractAddress}
-              onChange={(e) => setContractAddress(e.target.value)}
-              placeholder="0x..."
-              className="border p-2 rounded flex-grow"
-              disabled={selectedToken !== ''}
-            />
-            <button
-              onClick={initializeContract}
-              disabled={!contractAddress || isLoading}
-              className="bg-blue-800 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:bg-blue-400"
-            >
-              {isLoading ? 'Loading...' : 'Load Contract'}
-            </button>
-          </div>
-        </div>
-      );
-    }
+    // if () {
+    //   return (
+    //     <div className="mt-4">
+    //       <p className="mb-2">Initialize Contract:</p>
+    //       <div className="flex flex-col sm:flex-row gap-2">
+    //         <input
+    //           type="text"
+    //           value={contractAddress}
+    //           onChange={(e) => setContractAddress(e.target.value)}
+    //           placeholder="0x..."
+    //           className="border p-2 rounded flex-grow"
+    //           disabled={selectedToken !== ''}
+    //         />
+    //         <button
+    //           onClick={initializeContract}
+    //           disabled={!contractAddress || isLoading}
+    //           className="bg-blue-800 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:bg-blue-400"
+    //         >
+    //           {isLoading ? 'Loading...' : 'Load Contract'}
+    //         </button>
+    //       </div>
+    //     </div>
+    //   );
+    // }
 
     switch (selectedMenu) {
       case 'Token Info':
@@ -1022,6 +1492,19 @@ export default function AdminPanel() {
 
   return (
     <div className="flex flex-col md:flex-row h-screen bg-gray-100">
+      {/* Toast Container */}
+      <ToastContainer 
+        position="top-right"
+        autoClose={5000}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+      />
+      
       {/* Mobile Sidebar Toggle */}
       <div className="md:hidden bg-blue-900 p-4 flex items-center justify-between">
         <h1 className="text-xl font-bold text-white">Token Admin</h1>
@@ -1068,6 +1551,7 @@ export default function AdminPanel() {
           </div>
           
           {walletAddress ? (
+            <>
             <div className="flex flex-col sm:flex-row sm:items-center gap-2">
               <span className="text-sm text-gray-600">
                 {walletAddress.substring(0, 6)}...{walletAddress.substring(walletAddress.length - 4)}
@@ -1078,7 +1562,15 @@ export default function AdminPanel() {
               >
                 Disconnect
               </button>
+              <button 
+                onClick={initializeContract}
+                className="bg-green-600 text-white px-4 py-2 rounded hover:bg-red-700"
+              >
+                Refresh
+              </button>
             </div>
+       
+            </>
           ) : (
             <div className="flex flex-col w-full sm:w-auto">
               <button 
@@ -1100,6 +1592,29 @@ export default function AdminPanel() {
         {/* Content Area */}
         <div className="p-4 md:p-6 overflow-auto">
           <h2 className="text-xl md:text-2xl font-semibold mb-4">Token Admin</h2>
+          
+          {/* Network Warning Banner */}
+          {walletAddress && !isCorrectNetwork && (
+            <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between">
+                <div className="mb-2 md:mb-0">
+                  <p className="font-bold">Wrong Network Detected</p>
+                  <p className="text-sm">
+                    Please switch to Sepolia Testnet to interact with the token contracts.
+                    Current network: {currentChainId ? `Chain ID: ${currentChainId}` : 'Unknown'}
+                  </p>
+                </div>
+                <button
+                  onClick={switchToSepolia}
+                  disabled={isLoading}
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded"
+                >
+                  {isLoading ? 'Switching...' : 'Switch to Sepolia'}
+                </button>
+              </div>
+            </div>
+          )}
+          
           <h3 className="text-lg md:text-xl font-medium mb-2">{selectedMenu}</h3>
           <div className="bg-white rounded-lg shadow p-4 md:p-6">
             {renderContent()}

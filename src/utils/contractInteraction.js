@@ -6,6 +6,18 @@ export const contractInteraction = {
   // Initialize contract with address
   getContract: (contractAddress, provider) => {
     if (!contractAddress || !provider) return null;
+    
+    // If provider has getSigner method, it's a Web3Provider, so use the signer for write operations
+    if (provider.getSigner) {
+      try {
+        const signer = provider.getSigner();
+        return new ethers.Contract(contractAddress, Ethereum, signer);
+      } catch (error) {
+        console.error("Error getting signer:", error);
+        return new ethers.Contract(contractAddress, Ethereum, provider);
+      }
+    }
+    
     return new ethers.Contract(contractAddress, Ethereum, provider);
   },
 
@@ -55,6 +67,12 @@ export const contractInteraction = {
     // Get balance of address
     getBalanceOf: async (contract, address) => {
       try {
+        // Check if address is valid
+        if (!address || address === '') {
+          console.warn("Empty address provided to getBalanceOf");
+          return ethers.BigNumber.from(0);
+        }
+        
         const balance = await contract.balanceOf(address);
         return balance;
       } catch (error) {
@@ -66,6 +84,12 @@ export const contractInteraction = {
     // Get allowance
     getAllowance: async (contract, owner, spender) => {
       try {
+        // Check if addresses are valid
+        if (!owner || owner === '' || !spender || spender === '') {
+          console.warn("Empty address provided to getAllowance");
+          return ethers.BigNumber.from(0);
+        }
+        
         const allowance = await contract.allowance(owner, spender);
         return allowance;
       } catch (error) {
@@ -87,6 +111,12 @@ export const contractInteraction = {
     // Check if address is blacklisted
     isBlackListed: async (contract, address) => {
       try {
+        // Check if address is valid
+        if (!address || address === '') {
+          console.warn("Empty address provided to isBlackListed");
+          return false;
+        }
+        
         return await contract.isBlackListed(address);
       } catch (error) {
         console.error("Error checking blacklist status:", error);
@@ -97,6 +127,12 @@ export const contractInteraction = {
     // Check if address is whitelisted
     isWhiteListed: async (contract, address) => {
       try {
+        // Check if address is valid
+        if (!address || address === '') {
+          console.warn("Empty address provided to isWhiteListed");
+          return false;
+        }
+        
         return await contract.isWhiteListed(address);
       } catch (error) {
         console.error("Error checking whitelist status:", error);
@@ -120,10 +156,95 @@ export const contractInteraction = {
     // Transfer tokens
     transfer: async (contract, to, amount) => {
       try {
-        const tx = await contract.transfer(to, amount);
-        return await tx.wait();
+        // Ensure we're using a contract connected to a signer
+        if (!contract.signer) {
+          throw new Error("Contract must be connected to a signer for write operations");
+        }
+        
+        // Validate the recipient address
+        if (!to || to === '' || !ethers.utils.isAddress(to)) {
+          throw new Error("Invalid recipient address");
+        }
+        
+        // Validate amount
+        if (!amount || amount.lte(ethers.BigNumber.from(0))) {
+          throw new Error("Amount must be greater than 0");
+        }
+        
+        // Get the signer's address
+        const signerAddress = await contract.signer.getAddress();
+        console.log("Signer address:", signerAddress);
+        
+        // Check if the user has enough balance
+        const balance = await contract.balanceOf(signerAddress);
+        console.log("User balance:", balance.toString(), "Transfer amount:", amount.toString());
+        
+        if (balance.lt(amount)) {
+          throw new Error("Insufficient balance for transfer");
+        }
+        
+        // Check if the contract is paused
+        try {
+          const isPaused = await contract.paused();
+          if (isPaused) {
+            throw new Error("Token transfers are currently paused");
+          }
+        } catch (error) {
+          console.log("Could not check if contract is paused, continuing anyway");
+        }
+        
+        // Check if sender is blacklisted
+        try {
+          const isBlacklisted = await contract.isBlackListed(signerAddress);
+          if (isBlacklisted) {
+            throw new Error("Your address is blacklisted");
+          }
+        } catch (error) {
+          console.log("Could not check blacklist status, continuing anyway");
+        }
+        
+        // Check if whitelist is enabled and if sender is whitelisted
+        try {
+          const isWhitelistEnabled = await contract.isWhitelistEnabled();
+          if (isWhitelistEnabled) {
+            const isWhitelisted = await contract.isWhiteListed(signerAddress);
+            if (!isWhitelisted) {
+              throw new Error("Whitelist is enabled and your address is not whitelisted");
+            }
+          }
+        } catch (error) {
+          console.log("Could not check whitelist status, continuing anyway");
+        }
+        
+        console.log("Attempting transfer to:", to, "Amount:", amount.toString());
+        
+        // Try to estimate gas first to catch potential errors
+    
+        
+        // Send the transaction with explicit gas limit and higher gas price
+        const tx = await contract.transfer(to, amount, {
+          gasLimit: 200000, // Use estimate or fallback
+    
+        });
+        
+        console.log("Transaction hash:", tx.hash);
+        
+        // Wait for transaction confirmation
+        const receipt = await tx.wait();
+        console.log("Transaction confirmed:", receipt);
+        
+        // Check if transaction was successful
+        if (receipt.status === 0) {
+          throw new Error("Transaction failed on-chain");
+        }
+        
+        return receipt;
       } catch (error) {
         console.error("Error transferring tokens:", error);
+        // Unwrap nested errors
+        if (error.error) {
+          throw error.error;
+        }
         throw error;
       }
     },

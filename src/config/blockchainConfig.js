@@ -34,12 +34,12 @@ export const blockchainConfig = {
     // Sepolia Testnet
     sepolia: {
       name: "Sepolia Testnet",
-      rpcUrl: "https://sepolia.infura.io/v3/YOUR_INFURA_KEY", // Replace with your Infura key
-      chainId: 11155111,
+      rpcUrl: 'https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161', // Public Infura endpoint
+      chainId: 11155111, // Use decimal format for consistency
       blockExplorer: "https://sepolia.etherscan.io",
       tokens: {
         // Example test tokens
-        TestToken: "0xc01a4a974d126848348021eb48ac4e1632f31065", // USDT on Sepolia
+        TestToken: "0x17712AD044D30AFf9754c5E98454C3eb1de01b39", // USDT on Sepolia
       }
     }
   },
@@ -200,7 +200,7 @@ export const getTokenAddress = (blockchain, network, tokenSymbol) => {
 };
 
 // Helper function to switch network in MetaMask
-export const switchNetwork = async (blockchain, network = 'mainnet') => {
+export const switchNetwork = async (blockchain, network = 'sepolia') => {
   if (!window.ethereum) {
     throw new Error('MetaMask is not installed');
   }
@@ -212,7 +212,9 @@ export const switchNetwork = async (blockchain, network = 'mainnet') => {
     return;
   }
   
-  const chainId = `0x${networkConfig.chainId.toString(16)}`;
+  const chainId = typeof networkConfig.chainId === 'string' && networkConfig.chainId.startsWith('0x') 
+    ? networkConfig.chainId 
+    : `0x${networkConfig.chainId.toString(16)}`;
   
   try {
     // Try to switch to the network
@@ -220,29 +222,44 @@ export const switchNetwork = async (blockchain, network = 'mainnet') => {
       method: 'wallet_switchEthereumChain',
       params: [{ chainId }],
     });
+    
+    console.log(`Switched to ${networkConfig.name} (${chainId})`);
+    return true;
   } catch (error) {
     // This error code indicates that the chain has not been added to MetaMask
     if (error.code === 4902) {
-      await window.ethereum.request({
-        method: 'wallet_addEthereumChain',
-        params: [
-          {
-            chainId,
-            chainName: networkConfig.name,
-            nativeCurrency: {
-              name: blockchain,
-              symbol: blockchain === 'Ethereum' ? 'ETH' : 
-                     blockchain === 'BSC' ? 'BNB' : 
-                     blockchain === 'Polygon' ? 'MATIC' : 
-                     blockchain === 'Avalanche' ? 'AVAX' : 'Native',
-              decimals: 18,
+      try {
+        await window.ethereum.request({
+          method: 'wallet_addEthereumChain',
+          params: [
+            {
+              chainId,
+              chainName: networkConfig.name,
+              nativeCurrency: {
+                name: blockchain === 'Ethereum' ? 'Ether' : 
+                       blockchain === 'BSC' ? 'BNB' : 
+                       blockchain === 'Polygon' ? 'MATIC' : 
+                       blockchain === 'Avalanche' ? 'AVAX' : 'Native',
+                symbol: blockchain === 'Ethereum' ? 'ETH' : 
+                       blockchain === 'BSC' ? 'BNB' : 
+                       blockchain === 'Polygon' ? 'MATIC' : 
+                       blockchain === 'Avalanche' ? 'AVAX' : 'Native',
+                decimals: 18,
+              },
+              rpcUrls: [networkConfig.rpcUrl],
+              blockExplorerUrls: networkConfig.blockExplorer ? [networkConfig.blockExplorer] : undefined,
             },
-            rpcUrls: [networkConfig.rpcUrl],
-            blockExplorerUrls: [networkConfig.blockExplorer],
-          },
-        ],
-      });
+          ],
+        });
+        
+        console.log(`Added and switched to ${networkConfig.name} (${chainId})`);
+        return true;
+      } catch (addError) {
+        console.error("Error adding network:", addError);
+        throw addError;
+      }
     } else {
+      console.error("Error switching network:", error);
       throw error;
     }
   }
