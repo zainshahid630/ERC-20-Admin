@@ -380,5 +380,62 @@ export const contractInteraction = {
         throw error;
       }
     },
+
+    // Transfer ownership (requires owner permission)
+    transferOwnership: async (contract, newOwner) => {
+      try {
+        // Ensure we're using a contract connected to a signer
+        if (!contract.signer) {
+          throw new Error("Contract must be connected to a signer for write operations");
+        }
+        
+        // Validate the new owner address
+        if (!newOwner || newOwner === '' || !ethers.utils.isAddress(newOwner)) {
+          throw new Error("Invalid new owner address");
+        }
+        
+        // Get the signer's address
+        const signerAddress = await contract.signer.getAddress();
+        console.log("Signer address:", signerAddress);
+        
+        // Check if the signer is the current owner
+        try {
+          const owner = await contract.owner();
+          if (owner.toLowerCase() !== signerAddress.toLowerCase()) {
+            throw new Error("Only the current owner can transfer ownership");
+          }
+        } catch (error) {
+          console.error("Error checking ownership:", error);
+          throw new Error("Failed to verify ownership status");
+        }
+        
+        console.log("Attempting to transfer ownership to:", newOwner);
+        
+        // Send the transaction with explicit gas limit
+        const tx = await contract.transferOwnership(newOwner, {
+          gasLimit: 200000,
+        });
+        
+        console.log("Transaction hash:", tx.hash);
+        
+        // Wait for transaction confirmation
+        const receipt = await tx.wait();
+        console.log("Transaction confirmed:", receipt);
+        
+        // Check if transaction was successful
+        if (receipt.status === 0) {
+          throw new Error("Transaction failed on-chain");
+        }
+        
+        return receipt;
+      } catch (error) {
+        console.error("Error transferring ownership:", error);
+        // Unwrap nested errors
+        if (error.error) {
+          throw error.error;
+        }
+        throw error;
+      }
+    }
   }
 };
