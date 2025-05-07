@@ -260,11 +260,14 @@ export default function AdminPanel() {
       
       // Check if connected wallet is the owner
       let isOwner = false;
+      let ownerAddress = ''
       try {
         console.log('walletAddress',walletAddress)
         if (walletAddress ) {
           const owner = await tokenContract.owner();
+          ownerAddress = owner ; 
           console.log('owner',owner)
+
           isOwner = owner.toLowerCase() === walletAddress.toLowerCase();
         }
       } catch (error) {
@@ -278,6 +281,7 @@ export default function AdminPanel() {
         totalSupply: ethers.utils.formatUnits(totalSupply, decimals),
         balance: ethers.utils.formatUnits(balance, decimals),
         isOwner,
+        Owner:ownerAddress,
         isPaused,
         isWhitelistEnabled
       });
@@ -1111,7 +1115,9 @@ export default function AdminPanel() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-gray-50 p-4 rounded">
                 <h4 className="font-medium text-gray-700">Owner Status</h4>
-                <p className="text-lg">{tokenInfo.isOwner ? 'You are the owner' : 'You are not the owner'}</p>
+                {/* <p className="text-lg">{tokenInfo.isOwner ? 'You are the owner' : 'You are not the owner'}</p> */}
+                <p className="text-lg">{tokenInfo.isOwner ? 'You are the owner' : 
+                `You are not the owner Owner is :${tokenInfo?.Owner}`}</p>
               </div>
               <div className="bg-gray-50 p-4 rounded">
                 <h4 className="font-medium text-gray-700">Contract Status</h4>
