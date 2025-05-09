@@ -7,19 +7,17 @@ export const blockchainConfig = {
   // Ethereum configuration
   Ethereum: {
     // Mainnet
-    // mainnet: {
-    //   name: "Ethereum Mainnet",
-    //   rpcUrl: "https://mainnet.infura.io/v3/YOUR_INFURA_KEY", // Replace with your Infura key
-    //   chainId: 1,
-    //   blockExplorer: "https://etherscan.io",
-    //   tokens: {
-    //     // Example tokens
-    //     USDT: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-    //     USDC: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-    //     DAI: "0x6B175474E89094C44Da98b954EedeAC495271d0F",
-    //     // Add your tokens here
-    //   }
-    // },
+    mainnet: {
+      name: "Ethereum Mainnet",
+      rpcUrl: "https://mainnet.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161", // Replace with your Infura key
+      chainId: 1,
+      blockExplorer: "https://etherscan.io",
+      tokens: {
+        // Example tokens
+        USDT: "0x83540f53200564ffea1cC3FF2d8E686a171c4010",
+        // Add your tokens here
+      }
+    },
     // // Goerli Testnet
     // goerli: {
     //   name: "Goerli Testnet",
@@ -32,16 +30,16 @@ export const blockchainConfig = {
     //   }
     // },
     // Sepolia Testnet
-    sepolia: {
-      name: "Sepolia Testnet",
-      rpcUrl: 'https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161', // Public Infura endpoint
-      chainId: 11155111, // Use decimal format for consistency
-      blockExplorer: "https://sepolia.etherscan.io",
-      tokens: {
-        // Example test tokens
-        TestToken: "0x17712AD044D30AFf9754c5E98454C3eb1de01b39", // USDT on Sepolia
-      }
-    }
+    // sepolia: {
+    //   name: "Sepolia Testnet",
+    //   rpcUrl: 'https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161', // Public Infura endpoint
+    //   chainId: 11155111, // Use decimal format for consistency
+    //   blockExplorer: "https://sepolia.etherscan.io",
+    //   tokens: {
+    //     // Example test tokens
+    //     TestToken: "0x83540f53200564ffea1cC3FF2d8E686a171c4010", // USDT on Sepolia
+    //   }
+    // }
   },
   
   // Binance Smart Chain configuration

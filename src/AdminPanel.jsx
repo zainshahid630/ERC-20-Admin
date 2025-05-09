@@ -120,7 +120,7 @@ export default function AdminPanel() {
       
       // Check if we're on the correct network
       const network = await walletProvider.getNetwork();
-      const targetChainId = blockchainConfig['Ethereum']['sepolia'].chainId;
+      const targetChainId = blockchainConfig['Ethereum']['mainnet'].chainId;
       setCurrentChainId(network.chainId);
       setIsCorrectNetwork(network.chainId === targetChainId);
       
@@ -957,6 +957,59 @@ export default function AdminPanel() {
     }
   };
 
+  // Add this function to switch to Ethereum Mainnet
+  const switchToMainnet = async () => {
+    if (!provider) return;
+    
+    try {
+      setIsLoading(true);
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0x1' }], // Ethereum Mainnet chainId in hex
+      });
+      
+      // Refresh the page after switching
+      window.location.reload();
+    } catch (error) {
+      // This error code indicates that the chain has not been added to MetaMask
+      if (error.code === 4902) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [
+              {
+                chainId: '0x1',
+                chainName: 'Ethereum Mainnet',
+                nativeCurrency: {
+                  name: 'Ether',
+                  symbol: 'ETH',
+                  decimals: 18,
+                },
+                rpcUrls: ['https://mainnet.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161'],
+                blockExplorerUrls: ['https://etherscan.io'],
+              },
+            ],
+          });
+          
+          // Try switching again
+          await window.ethereum.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: '0x1' }],
+          });
+          
+          // Refresh the page after switching
+          window.location.reload();
+        } catch (addError) {
+          toast.error(`Failed to add Ethereum Mainnet: ${addError.message}`);
+        }
+      } else {
+        toast.error(`Failed to switch network: ${error.message}`);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Add this useEffect to check the network when provider changes
   useEffect(() => {
     const checkNetwork = async () => {
@@ -965,8 +1018,8 @@ export default function AdminPanel() {
           const network = await provider.getNetwork();
           setCurrentChainId(network.chainId);
           
-          // Check if we're on Sepolia (chainId 11155111)
-          const targetChainId = blockchainConfig['Ethereum']['sepolia'].chainId;
+          // Check if we're on Ethereum Mainnet (chainId 1)
+          const targetChainId = blockchainConfig['Ethereum']['mainnet'].chainId;
           setIsCorrectNetwork(network.chainId === targetChainId);
         } catch (error) {
           console.error("Error checking network:", error);
@@ -1113,18 +1166,90 @@ export default function AdminPanel() {
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-gray-50 p-4 rounded">
-                <h4 className="font-medium text-gray-700">Owner Status</h4>
-                {/* <p className="text-lg">{tokenInfo.isOwner ? 'You are the owner' : 'You are not the owner'}</p> */}
-                <p className="text-lg">{tokenInfo.isOwner ? 'You are the owner' : 
-                `You are not the owner Owner is :${tokenInfo?.Owner}`}</p>
+              <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-5">
+                <div className="flex items-center mb-3">
+                  <div className="p-2 bg-blue-50 rounded-full mr-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <h4 className="font-medium text-gray-800">Ownership Status</h4>
+                </div>
+                
+                {tokenInfo.isOwner ? (
+                  <div className="flex items-center text-green-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                    <p className="text-lg font-medium">You are the contract owner</p>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex items-center text-yellow-600 mb-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      <p className="text-lg font-medium">You are not the contract owner</p>
+                    </div>
+                    {tokenInfo?.Owner && (
+                      <div className="mt-2 bg-gray-50 p-3 rounded-md">
+                        <p className="text-sm text-gray-600 font-medium">Current Owner:</p>
+                        <p className="text-sm font-mono break-all">{tokenInfo.Owner}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-              <div className="bg-gray-50 p-4 rounded">
-                <h4 className="font-medium text-gray-700">Contract Status</h4>
-                <p className="text-lg">
-                  {tokenInfo.isPaused ? 'Paused' : 'Active'} / 
-                  Whitelist {tokenInfo.isWhitelistEnabled ? 'Enabled' : 'Disabled'}
-                </p>
+              
+              <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-5">
+                <div className="flex items-center mb-3">
+                  <div className="p-2 bg-blue-50 rounded-full mr-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <h4 className="font-medium text-gray-800">Contract Status</h4>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-gray-50 p-3 rounded-md">
+                    <p className="text-sm text-gray-600 mb-1">Transfer Status:</p>
+                    {tokenInfo.isPaused ? (
+                      <div className="flex items-center text-red-600">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clipRule="evenodd" />
+                        </svg>
+                        <span className="font-medium">Paused</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center text-green-600">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                        </svg>
+                        <span className="font-medium">Active</span>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="bg-gray-50 p-3 rounded-md">
+                    <p className="text-sm text-gray-600 mb-1">Whitelist:</p>
+                    {tokenInfo.isWhitelistEnabled ? (
+                      <div className="flex items-center text-blue-600">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                        <span className="font-medium">Enabled</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center text-gray-600">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 000 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+                        </svg>
+                        <span className="font-medium">Disabled</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1606,16 +1731,16 @@ export default function AdminPanel() {
                 <div className="mb-2 md:mb-0">
                   <p className="font-bold">Wrong Network Detected</p>
                   <p className="text-sm">
-                    Please switch to Sepolia Testnet to interact with the token contracts.
+                    Please switch to Ethereum Mainnet to interact with the token contracts.
                     Current network: {currentChainId ? `Chain ID: ${currentChainId}` : 'Unknown'}
                   </p>
                 </div>
                 <button
-                  onClick={switchToSepolia}
+                  onClick={switchToMainnet}
                   disabled={isLoading}
                   className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded"
                 >
-                  {isLoading ? 'Switching...' : 'Switch to Sepolia'}
+                  {isLoading ? 'Switching...' : 'Switch to Mainnet'}
                 </button>
               </div>
             </div>
